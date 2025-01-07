@@ -144,6 +144,9 @@ int main(int argc, char** argv) {
   commands.emplace_back("vocab_tree_matcher", &RunVocabTreeMatcher);
   commands.emplace_back("vocab_tree_retriever", &RunVocabTreeRetriever);
 
+  // @kai
+  commands.emplace_back("normalize", &RunNormalize);
+
   if (argc == 1) {
     return ShowHelp(commands);
   }

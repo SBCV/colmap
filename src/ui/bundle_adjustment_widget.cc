@@ -97,7 +97,7 @@ void BundleAdjustmentWidget::Run() {
 
   // Normalize scene for numerical stability and
   // to avoid large scale changes in viewer.
-  reconstruction_->Normalize();
+  // reconstruction_->Normalize();
 
   thread_control_widget_->StartThread("Bundle adjusting...", true, thread);
 }

@@ -41,3 +41,6 @@ doc/_build
 *.exe
 *.out
 *.app
+
+# ceres-solver
+ceres-solver/
