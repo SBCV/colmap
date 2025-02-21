@@ -221,6 +221,10 @@ void IncrementalMapperController::Run() {
   run_timer.PrintMinutes();
 }
 
+std::string IncrementalMapperController::GetStatsString() {
+  return database_cache_->GetStatsString();
+}
+
 bool IncrementalMapperController::LoadDatabase() {
   LOG(INFO) << "Loading database";
 

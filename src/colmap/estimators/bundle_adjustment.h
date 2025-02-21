@@ -1,3 +1,35 @@
+// ===============================================================================================================
+// Copyright (c) 2019, Cornell University. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+// the following conditions are met:
+//
+//     * Redistributions of source code must retain the above copyright otice, this list of conditions and
+//       the following disclaimer.
+//
+//     * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and
+//       the following disclaimer in the documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of Cornell University nor the names of its contributors may be used to endorse or
+//       promote products derived from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+// WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+// TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+// NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+// OF SUCH DAMAGE.
+//
+// Author: Kai Zhang (kz298@cornell.edu)
+//
+// The research is based upon work supported by the Office of the Director of National Intelligence (ODNI),
+// Intelligence Advanced Research Projects Activity (IARPA), via DOI/IBC Contract Number D17PC00287.
+// The U.S. Government is authorized to reproduce and distribute copies of this work for Governmental purposes.
+// ===============================================================================================================
+//
+//
 // Copyright (c) 2023, ETH Zurich and UNC Chapel Hill.
 // All rights reserved.
 //
@@ -64,6 +96,12 @@ struct BundleAdjustmentOptions {
   // Whether to print a final summary.
   bool print_summary = true;
 
+  // whether to add soft constraint on 3D points
+  bool constrain_points = false;
+  LossFunctionType constrain_points_loss = LossFunctionType::TRIVIAL;
+  double constrain_points_loss_scale = 1.0;
+  double constrain_points_loss_weight = 1.0;
+
   // Minimum number of residuals to enable multi-threading. Note that
   // single-threaded is typically better for small bundle adjustment problems
   // due to the overhead of threading.
@@ -90,6 +128,7 @@ struct BundleAdjustmentOptions {
   // Create a new loss function based on the specified options. The caller
   // takes ownership of the loss function.
   ceres::LossFunction* CreateLossFunction() const;
+  ceres::LossFunction* CreateConstrainPointsLossFunction() const;
 
   bool Check() const;
 };
@@ -140,16 +179,21 @@ class BundleAdjustmentConfig {
   // be variable or constant but not both at the same time.
   void AddVariablePoint(point3D_t point3D_id);
   void AddConstantPoint(point3D_t point3D_id);
+  void AddConstrainedPoint(point3D_t point3D_id);
   bool HasPoint(point3D_t point3D_id) const;
   bool HasVariablePoint(point3D_t point3D_id) const;
   bool HasConstantPoint(point3D_t point3D_id) const;
+  bool HasConstrainedPoint(point3D_t point3D_id) const;
   void RemoveVariablePoint(point3D_t point3D_id);
   void RemoveConstantPoint(point3D_t point3D_id);
+
+  void RemoveConstrainedPoint(point3D_t point3D_id);
 
   // Access configuration data.
   const std::unordered_set<image_t>& Images() const;
   const std::unordered_set<point3D_t>& VariablePoints() const;
   const std::unordered_set<point3D_t>& ConstantPoints() const;
+  const std::unordered_set<point3D_t>& ConstrainedPoints() const;
   const std::vector<int>& ConstantCamPositions(image_t image_id) const;
 
  private:
@@ -157,6 +201,8 @@ class BundleAdjustmentConfig {
   std::unordered_set<image_t> image_ids_;
   std::unordered_set<point3D_t> variable_point3D_ids_;
   std::unordered_set<point3D_t> constant_point3D_ids_;
+  // add constrained 3D points
+  std::unordered_set<point3D_t> constrained_point3D_ids_;
   std::unordered_set<image_t> constant_cam_poses_;
   std::unordered_map<image_t, std::vector<int>> constant_cam_positions_;
 };
@@ -185,10 +231,15 @@ class BundleAdjuster {
   void AddPointToProblem(point3D_t point3D_id,
                          Reconstruction* reconstruction,
                          ceres::LossFunction* loss_function);
+  // add constrained point to problem
+  void AddConstrainedPointToProblem(point3D_t point3D_id,
+                     Reconstruction* reconstruction,
+                         ceres::LossFunction* loss_function);
 
  protected:
   void ParameterizeCameras(Reconstruction* reconstruction);
   void ParameterizePoints(Reconstruction* reconstruction);
+  // void ParameterizeConstrainedPoints(Reconstruction* reconstruction);
 
   const BundleAdjustmentOptions options_;
   BundleAdjustmentConfig config_;
