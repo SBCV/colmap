@@ -1,3 +1,35 @@
+// ===============================================================================================================
+// Copyright (c) 2019, Cornell University. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+// the following conditions are met:
+//
+//     * Redistributions of source code must retain the above copyright otice, this list of conditions and
+//       the following disclaimer.
+//
+//     * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and
+//       the following disclaimer in the documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of Cornell University nor the names of its contributors may be used to endorse or
+//       promote products derived from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+// WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+// TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+// NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+// OF SUCH DAMAGE.
+//
+// Author: Kai Zhang (kz298@cornell.edu)
+//
+// The research is based upon work supported by the Office of the Director of National Intelligence (ODNI),
+// Intelligence Advanced Research Projects Activity (IARPA), via DOI/IBC Contract Number D17PC00287.
+// The U.S. Government is authorized to reproduce and distribute copies of this work for Governmental purposes.
+// ===============================================================================================================
+//
+//
 // Copyright (c) 2023, ETH Zurich and UNC Chapel Hill.
 // All rights reserved.
 //
@@ -36,6 +68,12 @@
 #include "colmap/sensor/models.h"
 #include "colmap/util/misc.h"
 
+#include <map>
+#include <fstream>
+#include <iomanip>
+
+#define PRECISION 17
+
 namespace colmap {
 namespace mvs {
 
@@ -44,8 +82,8 @@ void Model::Read(const std::string& path, const std::string& format) {
   StringToLower(&format_lower_case);
   if (format_lower_case == "colmap") {
     ReadFromCOLMAP(path);
-  } else if (format_lower_case == "pmvs") {
-    ReadFromPMVS(path);
+  // } else if (format_lower_case == "pmvs") {
+  //   ReadFromPMVS(path);
   } else {
     LOG(FATAL_THROW) << "Invalid input format";
   }
@@ -57,6 +95,19 @@ void Model::ReadFromCOLMAP(const std::string& path,
   Reconstruction reconstruction;
   reconstruction.Read(JoinPaths(path, sparse_path));
 
+  // read-in the last row of the 4 by 4 matrices here
+  std::map<std::string, double *> last_rows;
+  std::ifstream infile;
+  infile.open(JoinPaths(path, "last_rows.txt"));
+  std::string image_name;
+  double vec[4];
+  while (infile >> image_name >> vec[0] >> vec[1] >> vec[2] >> vec[3]) {
+    double* vec_ptr = new double[4];
+    memcpy(vec_ptr, vec, 4*sizeof(double));
+    last_rows[image_name] = vec_ptr;
+  }
+  infile.close();
+
   images.reserve(reconstruction.NumRegImages());
   std::unordered_map<image_t, size_t> image_id_to_idx;
   for (size_t i = 0; i < reconstruction.NumRegImages(); ++i) {
@@ -64,20 +115,49 @@ void Model::ReadFromCOLMAP(const std::string& path,
     const auto& image = reconstruction.Image(image_id);
     const auto& camera = reconstruction.Camera(image.CameraId());
 
-    const std::string image_path = JoinPaths(path, images_path, image.Name());
-    const Eigen::Matrix<float, 3, 3, Eigen::RowMajor> K =
-        camera.CalibrationMatrix().cast<float>();
-    const Eigen::Matrix<float, 3, 3, Eigen::RowMajor> R =
-        image.CamFromWorld().rotation.toRotationMatrix().cast<float>();
-    const Eigen::Vector3f T = image.CamFromWorld().translation.cast<float>();
+    CHECK(camera.model_id == PinholeCameraModel::model_id ||
+     camera.model_id == PerspectiveCameraModel::model_id);
+
+    const std::string image_path = JoinPaths(path, "images", image.Name());
+    const Eigen::Matrix<double, 3, 3, Eigen::RowMajor> K = camera.CalibrationMatrix().cast<double>();
+    const Eigen::Matrix<double, 3, 3, Eigen::RowMajor> R = image.CamFromWorld().rotation.toRotationMatrix().cast<double>();
+    const Eigen::Vector3d T = image.CamFromWorld().translation.cast<double>();
 
     images.emplace_back(
         image_path, camera.width, camera.height, K.data(), R.data(), T.data());
+
+    // set last row
+    // check whether the image exists in last_rows
+    if (last_rows.find(image.Name()) == last_rows.end()) {
+      std::cout << "setting the last row for image: " << image.Name() << " to be (0, 0, 0, 1), because no last_row exists" << std::endl;
+      double default_last_row[4] = {0., 0., 0., 1.};
+      images.back().SetLastRow(default_last_row);
+    } else {
+      images.back().SetLastRow(last_rows.find(image.Name())->second);
+    }
+
     image_id_to_idx.emplace(image_id, i);
     image_names_.push_back(image.Name());
     image_name_to_idx_.emplace(image.Name(), i);
   }
 
+ // free memory
+  for (auto it=last_rows.begin(); it != last_rows.end(); ++it) {
+    delete [] it->second;
+  }
+
+  // read depth ranges
+  for (size_t i=0; i<image_names_.size(); ++i) {
+    depth_ranges_.emplace_back(-1e20f, -1e20f);
+  }
+
+  infile.open(JoinPaths(path, "depth_ranges.txt"));
+  while (infile >> image_name >> vec[0] >> vec[1]) {
+    depth_ranges_[image_name_to_idx_[image_name]] = std::make_pair (vec[0],vec[1]);
+  }
+  infile.close();
+
+  // parse sparse points
   points.reserve(reconstruction.NumPoints3D());
   for (const auto& point3D : reconstruction.Points3D()) {
     Point point;
@@ -90,6 +170,44 @@ void Model::ReadFromCOLMAP(const std::string& path,
     }
     points.push_back(point);
   }
+
+ // write image_name_to_idx to file
+  std::ofstream img_idx2name_file(JoinPaths(path, "img_idx2name.txt"), std::ios::trunc);
+  for(size_t i=0; i < image_names_.size(); ++i) {
+    img_idx2name_file << i << " " << image_names_[i] << "\n";
+  }
+  img_idx2name_file.close();
+
+  // write projection matrices and inverse projection matrices to files
+  std::ofstream P_file(JoinPaths(path, "proj_mats.txt"), std::ios::trunc);
+  // set fulll precision
+  P_file << std::setprecision(PRECISION);
+
+  std::ofstream inv_P_file(JoinPaths(path, "inv_proj_mats.txt"), std::ios::trunc);
+  // set fulll precision
+  inv_P_file << std::setprecision(PRECISION);
+
+  for (const auto& image: images) {
+    std::string img_path = image.GetPath();
+    std::string img_name = img_path.substr(img_path.rfind('/')+1);
+    // get projection matrices
+    double P[16];
+    double inv_P[16];
+    image.GetPinvPDouble(P, inv_P);
+
+    P_file << img_name;
+    inv_P_file << img_name;
+    for (int i=0; i<16; ++i) {
+      P_file << " " << P[i];
+      inv_P_file << " " << inv_P[i];
+    }
+    P_file << '\n';
+    inv_P_file << '\n';
+
+  }
+
+  P_file.close();
+  inv_P_file.close();
 }
 
 void Model::ReadFromPMVS(const std::string& path) {
@@ -170,47 +288,6 @@ const std::vector<std::vector<int>>& Model::GetMaxOverlappingImagesFromPMVS()
   return pmvs_vis_dat_;
 }
 
-std::vector<std::pair<float, float>> Model::ComputeDepthRanges() const {
-  std::vector<std::vector<float>> depths(images.size());
-  for (const auto& point : points) {
-    const Eigen::Vector3f X(point.x, point.y, point.z);
-    for (const auto& image_idx : point.track) {
-      const auto& image = images.at(image_idx);
-      const float depth =
-          Eigen::Map<const Eigen::Vector3f>(&image.GetR()[6]).dot(X) +
-          image.GetT()[2];
-      if (depth > 0) {
-        depths[image_idx].push_back(depth);
-      }
-    }
-  }
-
-  std::vector<std::pair<float, float>> depth_ranges(depths.size());
-  for (size_t image_idx = 0; image_idx < depth_ranges.size(); ++image_idx) {
-    auto& depth_range = depth_ranges[image_idx];
-
-    auto& image_depths = depths[image_idx];
-
-    if (image_depths.empty()) {
-      depth_range.first = -1.0f;
-      depth_range.second = -1.0f;
-      continue;
-    }
-
-    std::sort(image_depths.begin(), image_depths.end());
-
-    const float kMinPercentile = 0.01f;
-    const float kMaxPercentile = 0.99f;
-    depth_range.first = image_depths[image_depths.size() * kMinPercentile];
-    depth_range.second = image_depths[image_depths.size() * kMaxPercentile];
-
-    const float kStretchRatio = 0.25f;
-    depth_range.first *= (1.0f - kStretchRatio);
-    depth_range.second *= (1.0f + kStretchRatio);
-  }
-
-  return depth_ranges;
-}
 
 std::vector<std::map<int, int>> Model::ComputeSharedPoints() const {
   std::vector<std::map<int, int>> shared_points(images.size());
@@ -234,9 +311,9 @@ std::vector<std::map<int, float>> Model::ComputeTriangulationAngles(
   std::vector<Eigen::Vector3d> proj_centers(images.size());
   for (size_t image_idx = 0; image_idx < images.size(); ++image_idx) {
     const auto& image = images[image_idx];
-    Eigen::Vector3f C;
-    ComputeProjectionCenter(image.GetR(), image.GetT(), C.data());
-    proj_centers[image_idx] = C.cast<double>();
+    double C[3];
+    image.GetCDouble(C);
+    proj_centers[image_idx] = Eigen::Map<const Eigen::Vector3d>(C);
   }
 
   std::vector<std::map<int, std::vector<float>>> all_triangulation_angles(
@@ -293,7 +370,7 @@ bool Model::ReadFromBundlerPMVS(const std::string& path) {
     const std::string image_name = StringPrintf("%08d.jpg", image_idx);
     const std::string image_path = JoinPaths(path, "visualize", image_name);
 
-    float K[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    double K[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
     file >> K[0];
     K[4] = K[0];
 
@@ -302,12 +379,12 @@ bool Model::ReadFromBundlerPMVS(const std::string& path) {
     K[2] = bitmap.Width() / 2.0f;
     K[5] = bitmap.Height() / 2.0f;
 
-    float k1, k2;
+    double k1, k2;
     file >> k1 >> k2;
     THROW_CHECK_EQ(k1, 0.0f);
     THROW_CHECK_EQ(k2, 0.0f);
 
-    float R[9];
+    double R[9];
     for (size_t i = 0; i < 9; ++i) {
       file >> R[i];
     }
@@ -315,7 +392,7 @@ bool Model::ReadFromBundlerPMVS(const std::string& path) {
       R[i] = -R[i];
     }
 
-    float T[3];
+    double T[3];
     file >> T[0] >> T[1] >> T[2];
     T[1] = -T[1];
     T[2] = -T[2];
@@ -393,9 +470,9 @@ bool Model::ReadFromRawPMVS(const std::string& path) {
     K(2, 1) = 0.0f;
     K(2, 2) = 1.0f;
 
-    const Eigen::Matrix<float, 3, 3, Eigen::RowMajor> K_float = K.cast<float>();
-    const Eigen::Matrix<float, 3, 3, Eigen::RowMajor> R_float = R.cast<float>();
-    const Eigen::Vector3f T_float = T.cast<float>();
+    const Eigen::Matrix<double, 3, 3, Eigen::RowMajor> K_float = K;
+    const Eigen::Matrix<double, 3, 3, Eigen::RowMajor> R_float = R;
+    const Eigen::Vector3d T_float = T;
 
     images.emplace_back(image_path,
                         bitmap.Width(),

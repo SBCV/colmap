@@ -47,9 +47,9 @@ namespace mvs {
 // Simple sparse model class.
 struct Model {
   struct Point {
-    float x = 0;
-    float y = 0;
-    float z = 0;
+    double x = 0;
+    double y = 0;
+    double z = 0;
     std::vector<int> track;
   };
 
@@ -74,8 +74,9 @@ struct Model {
   const std::vector<std::vector<int>>& GetMaxOverlappingImagesFromPMVS() const;
 
   // Compute the robust minimum and maximum depths from the sparse point cloud.
-  std::vector<std::pair<float, float>> ComputeDepthRanges() const;
-
+  std::vector<std::pair<float, float>> GetDepthRanges() const {
+    return depth_ranges_;
+  }
   // Compute the number of shared points between all overlapping images.
   std::vector<std::map<int, int>> ComputeSharedPoints() const;
 
@@ -99,6 +100,7 @@ struct Model {
   std::unordered_map<std::string, int> image_name_to_idx_;
 
   std::vector<std::vector<int>> pmvs_vis_dat_;
+  std::vector<std::pair<float, float>> depth_ranges_;
 };
 
 }  // namespace mvs
