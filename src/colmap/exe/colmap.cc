@@ -139,6 +139,9 @@ int main(int argc, char** argv) {
   commands.emplace_back("vocab_tree_matcher", &colmap::RunVocabTreeMatcher);
   commands.emplace_back("vocab_tree_retriever", &colmap::RunVocabTreeRetriever);
 
+  // @kai
+  commands.emplace_back("normalize", &colmap::RunNormalize);
+
   if (argc == 1) {
     return ShowHelp(commands);
   }

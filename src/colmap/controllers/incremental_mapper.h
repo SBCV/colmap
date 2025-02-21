@@ -165,6 +165,8 @@ class IncrementalMapperController : public BaseController {
   void TriangulateReconstruction(
       const std::shared_ptr<Reconstruction>& reconstruction);
 
+  std::string GetStatsString();
+
   bool LoadDatabase();
 
   // getter functions for python pipelines

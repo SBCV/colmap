@@ -1,3 +1,35 @@
+// ===============================================================================================================
+// Copyright (c) 2019, Cornell University. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+// the following conditions are met:
+//
+//     * Redistributions of source code must retain the above copyright otice, this list of conditions and
+//       the following disclaimer.
+//
+//     * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and
+//       the following disclaimer in the documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of Cornell University nor the names of its contributors may be used to endorse or
+//       promote products derived from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+// WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+// TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+// NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+// OF SUCH DAMAGE.
+//
+// Author: Kai Zhang (kz298@cornell.edu)
+//
+// The research is based upon work supported by the Office of the Director of National Intelligence (ODNI),
+// Intelligence Advanced Research Projects Activity (IARPA), via DOI/IBC Contract Number D17PC00287.
+// The U.S. Government is authorized to reproduce and distribute copies of this work for Governmental purposes.
+// ===============================================================================================================
+//
+//
 // Copyright (c) 2023, ETH Zurich and UNC Chapel Hill.
 // All rights reserved.
 //
@@ -326,10 +358,19 @@ void Reconstruction::DeRegisterImage(const image_t image_id) {
       reg_image_ids_.end());
 }
 
+// @kai
+// void Reconstruction::Normalize(const double extent, const double p0,
+//                                const double p1, const bool use_images) {
+// }
 void Reconstruction::Normalize(const double extent,
                                const double p0,
                                const double p1,
-                               const bool use_images) {
+                               const bool use_images,
+                               Eigen::Vector3d *translation_applied,
+                               double *scale_applied) {
+
+  std::cout << "Reconstruction Normalization is called!!!!\n\n";
+
   THROW_CHECK_GT(extent, 0);
 
   if ((use_images && reg_image_ids_.size() < 2) ||
@@ -352,6 +393,20 @@ void Reconstruction::Normalize(const double extent,
   Sim3d tform(
       scale, Eigen::Quaterniond::Identity(), -scale * std::get<2>(bound));
   Transform(tform);
+
+  // @Sebastian
+  // bound = bbox_min, bbox_max, mean_coord
+  const Eigen::Vector3d mean_coord = std::get<2>(bound);
+  const Eigen::Vector3d translation = mean_coord;
+
+  // save result
+  if (translation_applied && scale_applied) {
+    //std::cout << "writing the result ...";
+    (*translation_applied)(0) = translation(0);
+    (*translation_applied)(1) = translation(1);
+    (*translation_applied)(2) = translation(2);
+    *scale_applied = scale;
+  }
 }
 
 Eigen::Vector3d Reconstruction::ComputeCentroid(const double p0,
@@ -676,14 +731,16 @@ void Reconstruction::UpdatePoint3DErrors() {
   }
 }
 
+// @kai never use the binary format that is not very intuitive
 void Reconstruction::Read(const std::string& path) {
-  if (ExistsFile(JoinPaths(path, "cameras.bin")) &&
-      ExistsFile(JoinPaths(path, "images.bin")) &&
-      ExistsFile(JoinPaths(path, "points3D.bin"))) {
-    ReadBinary(path);
-  } else if (ExistsFile(JoinPaths(path, "cameras.txt")) &&
-             ExistsFile(JoinPaths(path, "images.txt")) &&
-             ExistsFile(JoinPaths(path, "points3D.txt"))) {
+  // if (ExistsFile(JoinPaths(path, "cameras.bin")) &&
+  //     ExistsFile(JoinPaths(path, "images.bin")) &&
+  //     ExistsFile(JoinPaths(path, "points3D.bin"))) {
+  //   ReadBinary(path);
+  // } else
+  if (ExistsFile(JoinPaths(path, "cameras.txt")) &&
+      ExistsFile(JoinPaths(path, "images.txt")) &&
+      ExistsFile(JoinPaths(path, "points3D.txt"))) {
     ReadText(path);
   } else {
     LOG(FATAL_THROW) << "cameras, images, points3D files do not exist at "
@@ -691,7 +748,9 @@ void Reconstruction::Read(const std::string& path) {
   }
 }
 
-void Reconstruction::Write(const std::string& path) const { WriteBinary(path); }
+// @kai
+void Reconstruction::Write(const std::string& path) const { WriteText(path); }
+// void Reconstruction::Write(const std::string& path) const { WriteBinary(path); }
 
 void Reconstruction::ReadText(const std::string& path) {
   cameras_.clear();
@@ -980,6 +1039,32 @@ size_t Reconstruction::FilterPoints3DWithLargeReprojectionError(
   }
 
   return num_filtered;
+}
+
+// @kai
+void Reconstruction::UpdateReprojErr() {
+  const std::unordered_set<point3D_t>& point3D_ids = this->Point3DIds();
+  for (const auto point3D_id : point3D_ids) {
+    if (!ExistsPoint3D(point3D_id)) {
+      continue;
+    }
+
+    class Point3D& point3D = this->Point3D(point3D_id);
+
+    double reproj_error_sum = 0.0;
+      for (const auto& track_el : point3D.track.Elements()) {
+        const class Image& image = this->Image(track_el.image_id);
+        const class Camera& camera = this->Camera(image.CameraId());
+        const Point2D& point2D = image.Point2D(track_el.point2D_idx);
+        const double squared_reproj_error = CalculateSquaredReprojectionError(
+            point2D.xy,
+            point3D.xyz,
+            image.CamFromWorld(),
+            camera);
+        reproj_error_sum += std::sqrt(squared_reproj_error);
+      }
+      point3D.error = reproj_error_sum / point3D.track.Length();
+  }
 }
 
 void Reconstruction::SetObservationAsTriangulated(

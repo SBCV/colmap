@@ -1,3 +1,35 @@
+// ===============================================================================================================
+// Copyright (c) 2019, Cornell University. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without modification, are permitted provided that
+// the following conditions are met:
+//
+//     * Redistributions of source code must retain the above copyright otice, this list of conditions and
+//       the following disclaimer.
+//
+//     * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and
+//       the following disclaimer in the documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of Cornell University nor the names of its contributors may be used to endorse or
+//       promote products derived from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+// WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+// TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+// NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+// OF SUCH DAMAGE.
+//
+// Author: Kai Zhang (kz298@cornell.edu)
+//
+// The research is based upon work supported by the Office of the Director of National Intelligence (ODNI),
+// Intelligence Advanced Research Projects Activity (IARPA), via DOI/IBC Contract Number D17PC00287.
+// The U.S. Government is authorized to reproduce and distribute copies of this work for Governmental purposes.
+// ===============================================================================================================
+//
+//
 // Copyright (c) 2023, ETH Zurich and UNC Chapel Hill.
 // All rights reserved.
 //
@@ -91,6 +123,7 @@ enum class CameraModelId {
   kSimpleRadialFisheye = 8,
   kRadialFisheye = 9,
   kThinPrismFisheye = 10,
+  kPerspective = 11,
 };
 
 #ifndef CAMERA_MODEL_DEFINITIONS
@@ -143,7 +176,8 @@ enum class CameraModelId {
   CAMERA_MODEL_CASE(OpenCVFisheyeCameraModel)       \
   CAMERA_MODEL_CASE(FullOpenCVCameraModel)          \
   CAMERA_MODEL_CASE(FOVCameraModel)                 \
-  CAMERA_MODEL_CASE(ThinPrismFisheyeCameraModel)
+  CAMERA_MODEL_CASE(ThinPrismFisheyeCameraModel)    \
+  CAMERA_MODEL_CASE(PerspectiveCameraModel)
 #endif
 
 #ifndef CAMERA_MODEL_SWITCH_CASES
@@ -372,6 +406,15 @@ struct ThinPrismFisheyeCameraModel
       CameraModelId::kThinPrismFisheye, "THIN_PRISM_FISHEYE", 2, 2, 8)
 };
 
+// full perspective camera with skew parameter
+// Parameter list is expected in the following order:
+// fx, fy, cx, cy, s
+struct PerspectiveCameraModel
+  : public BaseCameraModel<PerspectiveCameraModel> {
+  CAMERA_MODEL_DEFINITIONS(
+    CameraModelId::kPerspective, "PERSPECTIVE", 2, 2, 1)
+};
+
 // Check whether camera model with given name or identifier exists.
 bool ExistsCameraModelWithName(const std::string& model_name);
 bool ExistsCameraModelWithId(CameraModelId model_id);
@@ -500,13 +543,14 @@ bool BaseCameraModel<CameraModel>::HasBogusParams(
     const T min_focal_length_ratio,
     const T max_focal_length_ratio,
     const T max_extra_param) {
-  return HasBogusPrincipalPoint(params, width, height) ||
-         HasBogusFocalLength(params,
-                             width,
-                             height,
-                             min_focal_length_ratio,
-                             max_focal_length_ratio) ||
-         HasBogusExtraParams(params, max_extra_param);
+  // return HasBogusPrincipalPoint(params, width, height) ||
+  //        HasBogusFocalLength(params,
+  //                            width,
+  //                            height,
+  //                            min_focal_length_ratio,
+  //                            max_focal_length_ratio) ||
+  //        HasBogusExtraParams(params, max_extra_param);
+  return false;
 }
 
 template <typename CameraModel>
@@ -1536,6 +1580,80 @@ void ThinPrismFisheyeCameraModel::Distortion(
   *du = u * radial + T(2) * p1 * uv + p2 * (r2 + T(2) * u2) + sx1 * r2;
   *dv = v * radial + T(2) * p2 * uv + p1 * (r2 + T(2) * v2) + sy1 * r2;
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Perspective Camera Model
+
+std::string PerspectiveCameraModel::InitializeParamsInfo() {
+  return "fx, fy, cx, cy, s";
+}
+
+std::array<size_t, 2> PerspectiveCameraModel::InitializeFocalLengthIdxs() {
+  return {0, 1};
+}
+
+std::array<size_t, 2> PerspectiveCameraModel::InitializePrincipalPointIdxs() {
+  return {2, 3};
+}
+
+std::array<size_t, 1> PerspectiveCameraModel::InitializeExtraParamsIdxs() {
+  return {4};
+}
+
+std::vector<double> PerspectiveCameraModel::InitializeParams(
+    const double focal_length, const size_t width, const size_t height) {
+  return {focal_length, focal_length, width / 2.0, height / 2.0, 0};
+}
+
+template <typename T>
+void PerspectiveCameraModel::ImgFromCam(const T* params, T u, T v, T w, T* x, T* y) {
+  const T f1 = params[0];
+  const T f2 = params[1];
+  const T c1 = params[2];
+  const T c2 = params[3];
+  const T s = params[4];  // skew parameter
+
+  // No Distortion
+
+  // Transform to image coordinates
+  *x = f1 * u / w + s * v / w + c1;   // skew effect is added here
+  *y = f2 * v / w + c2;
+}
+
+template <typename T>
+void PerspectiveCameraModel::CamFromImg(
+  const T* params, const T x, const T y, T* u, T* v, T* w) {
+  const T f1 = params[0];
+  const T f2 = params[1];
+  const T c1 = params[2];
+  const T c2 = params[3];
+  const T s = params[4];  // skew parameter
+
+  // Lift points to normalized plane
+  *v = (y - c2) / f2;           // v must be calculated first, because u depends on v
+  *u = (x - c1 - s * *v) / f1;  // skew effect is added here
+  *w = 1;
+
+  // IterativeUndistortion(&params[5], u, v);
+}
+
+//template <typename T>
+//void PerspectiveCameraModel::Distortion(const T* extra_params, const T u, const T v,
+//                                   T* du, T* dv) {
+//  const T k1 = extra_params[0];
+//  const T k2 = extra_params[1];
+//  const T p1 = extra_params[2];
+//  const T p2 = extra_params[3];
+//
+//  const T u2 = u * u;
+//  const T uv = u * v;
+//  const T v2 = v * v;
+//  const T r2 = u2 + v2;
+//  const T radial = k1 * r2 + k2 * r2 * r2;
+//  *du = u * radial + T(2) * p1 * uv + p2 * (r2 + T(2) * u2);
+//  *dv = v * radial + T(2) * p2 * uv + p1 * (r2 + T(2) * v2);
+//}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 
