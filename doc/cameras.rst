@@ -36,6 +36,12 @@ model that is complex enough to model the distortion effects:
 - ``EUCM``: Use this camera model for wide-angle fisheye cameras and catadioptric
   systems. It represents radial distortion using two
   parameters in addition to the standard pinhole parameters.
+- ``PERSPECTIVE``: The pinhole projection with the most general linear
+  (distortion-free) calibration matrix, adding a skew parameter to the
+  ``PINHOLE`` model. Use this camera model, if your images are undistorted a
+  priori but the pixel axes are not orthogonal, e.g. for cameras synthesized
+  from other sensor models such as perspective approximations of pushbroom
+  satellite imagery.
 
 You can inspect the estimated intrinsic parameters by double-clicking specific
 images in the model viewer or by exporting the model and opening the

@@ -107,7 +107,8 @@ MAKE_ENUM_CLASS_OVERLOAD_STREAM(CameraModelId,
                                 kSimpleFisheye,           // = 14
                                 kFisheye,                 // = 15
                                 kEUCM,                    // = 16
-                                kEquirectangular          // = 17
+                                kEquirectangular,         // = 17
+                                kPerspective              // = 18
 );
 
 // Definitions shared by all camera models (perspective and spherical alike).
@@ -229,7 +230,8 @@ MAKE_ENUM_CLASS_OVERLOAD_STREAM(CameraModelId,
   CAMERA_MODEL_CASE(DivisionCameraModel)            \
   CAMERA_MODEL_CASE(SimpleFisheyeCameraModel)       \
   CAMERA_MODEL_CASE(FisheyeCameraModel)             \
-  CAMERA_MODEL_CASE(EUCMCameraModel)
+  CAMERA_MODEL_CASE(EUCMCameraModel)                \
+  CAMERA_MODEL_CASE(PerspectiveCameraModel)
 #endif
 
 #ifndef SPHERICAL_CAMERA_MODEL_CASES
@@ -826,6 +828,32 @@ struct EquirectangularCameraModel
     *rz = cos_phi * std::cos(theta);
     return true;
   }
+};
+
+// Perspective camera model with full calibration matrix (including skew).
+//
+// This is the pinhole projection with the most general linear
+// (distortion-free) calibration matrix:
+//
+//    K = [ fx   s  cx ]
+//        [  0  fy  cy ]
+//        [  0   0   1 ]
+//
+// A non-zero skew arises, for example, when cameras are synthesized from
+// other sensor models, such as perspective approximations of the rational
+// polynomial coefficient (RPC) models of pushbroom satellite imagery
+// (e.g. Zhang et al., "Leveraging Vision Reconstruction Pipelines for
+// Satellite Imagery", ICCV Workshops 2019), or for sensors with
+// non-orthogonal pixel axes.
+//
+// Parameter list is expected in the following order:
+//
+//    fx, fy, cx, cy, s
+//
+struct PerspectiveCameraModel
+    : public BasePerspectivePinholeCameraModel<PerspectiveCameraModel> {
+  PERSPECTIVE_CAMERA_MODEL_DEFINITIONS(
+      CameraModelId::kPerspective, "PERSPECTIVE", 2, 2, 1, true)
 };
 
 // Check whether camera model with given name or identifier exists.
@@ -2899,6 +2927,73 @@ bool EquirectangularCameraModel::CamFromImg(
 
   *u = rx / rz;
   *v = ry / rz;
+  return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// PerspectiveCameraModel
+
+std::string PerspectiveCameraModel::InitializeParamsInfo() {
+  return "fx, fy, cx, cy, s";
+}
+
+std::array<size_t, 2> PerspectiveCameraModel::InitializeFocalLengthIdxs() {
+  return {0, 1};
+}
+
+std::array<size_t, 2> PerspectiveCameraModel::InitializePrincipalPointIdxs() {
+  return {2, 3};
+}
+
+std::array<size_t, 1> PerspectiveCameraModel::InitializeExtraParamsIdxs() {
+  return {4};
+}
+
+std::vector<double> PerspectiveCameraModel::InitializeParams(
+    const double focal_length, const size_t width, const size_t height) {
+  return {focal_length, focal_length, width / 2.0, height / 2.0, 0};
+}
+
+template <typename T>
+bool PerspectiveCameraModel::ImgFromCam(const T* params,
+                                        const T& u,
+                                        const T& v,
+                                        const T& w,
+                                        T* x,
+                                        T* y,
+                                        const bool check_cheirality) {
+  if (!HasProjectableDepth(w, check_cheirality)) {
+    return false;
+  }
+
+  const T f1 = params[0];
+  const T f2 = params[1];
+  const T c1 = params[2];
+  const T c2 = params[3];
+  const T s = params[4];
+
+  // No Distortion
+
+  // Transform to image coordinates
+  const T uu = u / w;
+  const T vv = v / w;
+  *x = f1 * uu + s * vv + c1;
+  *y = f2 * vv + c2;
+
+  return true;
+}
+
+bool PerspectiveCameraModel::CamFromImg(
+    const double* params, double x, double y, double* u, double* v) {
+  const double f1 = params[0];
+  const double f2 = params[1];
+  const double c1 = params[2];
+  const double c2 = params[3];
+  const double s = params[4];
+
+  *v = (y - c2) / f2;
+  *u = (x - c1 - s * *v) / f1;
+
   return true;
 }
 
